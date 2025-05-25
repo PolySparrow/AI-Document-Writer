@@ -14,7 +14,7 @@ import io
 from googleapiclient.http import MediaIoBaseDownload
 import google.auth
 from googleapiclient.errors import HttpError
-
+import json
 
 # Set up OpenAI
 openai.api_key = config.openai_apikey
@@ -136,23 +136,24 @@ def upload_to_openai(file_path):
         )
     return response.id
 
-def create_assistant(file_ids):
+def create_assistant():
     assistant = openai.beta.assistants.create(
         name="PDF Query Assistant",
         instructions="You are a helpful assistant. Use the attached PDFs to answer questions.",
-        tools=[{"type": "retrieval"}],
-        file_ids=file_ids
+        tools=[{"type": "file_search"}],
+        model=config.model,  # e.g., "gpt-3.5-turbo" or "gpt-4"
     )
     return assistant.id
 
-def query_assistant(assistant_id, question):
+def query_assistant(assistant_id, question,file_ids):
     # Create a thread
     thread = openai.beta.threads.create()
     # Add user message
     openai.beta.threads.messages.create(
         thread_id=thread.id,
         role="user",
-        content=question
+       # content="Summarize the attached PDFs.",
+        attachments=file_ids
     )
     # Run the assistant
     run = openai.beta.threads.runs.create(
@@ -171,6 +172,7 @@ def query_assistant(assistant_id, question):
     # Get assistant's response
     messages = openai.beta.threads.messages.list(thread_id=thread.id)
     for msg in messages.data:
+        print(msg.content[0].text.value)
         if msg.role == "assistant":
             print("Assistant:", msg.content[0].text.value)
 
@@ -178,10 +180,10 @@ def main():
     # Step 1: Download PDFs from Google Drive
     service = get_drive_service()
     file_link = extract_folder_id(config.google_filelink)
-    print(file_link)
+    #print(file_link)
     pdf_files = list_pdfs_recursive(service,file_link)
     print(f"Found {len(pdf_files)} PDF files.")
-    print(pdf_files)
+    #print(pdf_files)
     file_ids = []
     for file in pdf_files:
         print(f"Downloading: {file['name']}")
@@ -191,22 +193,27 @@ def main():
         mime_type=file['mimeType'],
         dest_folder='pdfs'  # or any folder you want
     )
-        # print(f"Uploading {file['name']} to OpenAI...")
-        # file_id = upload_to_openai(local_path)
-        # print(f"Uploaded: {file_id}")
-        # file_ids.append(file_id)
-
+        print(f"Uploading {file['name']} to OpenAI...")
+        file_id = upload_to_openai(local_path)
+        print(f"Uploaded: {file_id}")
+        file_ids.append(file_id)
+    #print(file_ids)
+    for fid in file_ids:
+        attachments = [
+        {"file_id": fid, "tools": [{"type": "file_search"}]} 
+        ]
+    #print(json.dumps(attachments, indent=2))
     if not file_ids:
         print("No PDFs found or uploaded.")
         return
 
     # Step 2: Create Assistant with uploaded PDFs
-    assistant_id = create_assistant(file_ids)
+    assistant_id = create_assistant()
     print(f"Assistant created with ID: {assistant_id}")
 
     # # Step 3: Query the Assistant
     question = input("Enter your question about the PDFs: ")
-    query_assistant(assistant_id, question)
+    query_assistant(assistant_id, question,attachments)
 
 if __name__ == "__main__":
     main()
