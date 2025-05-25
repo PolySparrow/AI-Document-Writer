@@ -1,7 +1,8 @@
 #setup File
 config.py #stores sensitive information like API keys, database URIs, etc.
 client_secret_406762198232-n84mlq0af58ju50ii92u9u1gnoi0p515.apps.googleusercontent.com.json #Google client secret file
-pdfs/ #Directory to store downloaded PDFs
+pdfs/
+ #Directory to store downloaded PDFs
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
@@ -180,3 +181,4 @@ client_secret_406762198232-n84mlq0af58ju50ii92u9u1gnoi0p515.apps.googleuserconte
 config.py
 credentials.json
 token.pickle
+token_docs.pickle
