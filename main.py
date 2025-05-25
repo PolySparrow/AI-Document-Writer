@@ -9,6 +9,12 @@ from google.auth.transport.requests import Request
 import pickle
 import config
 import re
+import os
+import io
+from googleapiclient.http import MediaIoBaseDownload
+import google.auth
+from googleapiclient.errors import HttpError
+
 
 # Set up OpenAI
 openai.api_key = config.openai_apikey
@@ -45,36 +51,33 @@ def extract_folder_id(link):
 def list_pdfs_recursive(service, folder_id):
     pdfs = []
 
-    # List PDFs in the current folder
-    query = f"mimeType='application/pdf' and '{folder_id}' in parents"
+    # List all items in the current folder
+    query = f"'{folder_id}' in parents"
     page_token = None
     while True:
         response = service.files().list(
             q=query,
             pageSize=1000,
-            fields="nextPageToken, files(id, name)",
+            fields="nextPageToken, files(id, name, mimeType)",
+            includeItemsFromAllDrives=True,
+            supportsAllDrives=True,
             pageToken=page_token
         ).execute()
-        pdfs.extend(response.get('files', []))
+        items = response.get('files', [])
         page_token = response.get('nextPageToken', None)
+
+        # Add only PDFs to the output
+        for item in items:
+            if item['mimeType'] == 'application/pdf':
+                pdfs.append(item)
+            # If it's a folder, recurse into it
+            elif item['mimeType'] == 'application/vnd.google-apps.folder':
+                pdfs.extend(list_pdfs_recursive(service, item['id']))
         if page_token is None:
             break
 
-    # List subfolders in the current folder
-    folder_query = f"mimeType='application/vnd.google-apps.folder' and '{folder_id}' in parents"
-    page_token = None
-    subfolders = []
-    while True:
-        response = service.files().list(
-            q=folder_query,
-            pageSize=1000,
-            fields="nextPageToken, files(id, name)",
-            pageToken=page_token
-        ).execute()
-        subfolders.extend(response.get('files', []))
-        page_token = response.get('nextPageToken', None)
-        if page_token is None:
-            break
+    return pdfs
+
 
     # Recursively search each subfolder
     for folder in subfolders:
@@ -83,16 +86,47 @@ def list_pdfs_recursive(service, folder_id):
     return pdfs
 
 
-def download_pdf(service, file_id, file_name, dest_folder='pdfs'):
+
+
+
+def download_file(service, file_id, file_name, mime_type, dest_folder='pdfs'):
+    import os
+    import io
+    from googleapiclient.http import MediaIoBaseDownload
+
     os.makedirs(dest_folder, exist_ok=True)
-    request = service.files().get_media(fileId=file_id)
-    fh = io.FileIO(os.path.join(dest_folder, file_name), 'wb')
+    file_path = os.path.join(dest_folder, file_name)
+
+    # Google Workspace file types and their export MIME types
+    export_mime_types = {
+        'application/vnd.google-apps.document': 'application/pdf',
+        'application/vnd.google-apps.spreadsheet': 'application/pdf',
+        'application/vnd.google-apps.presentation': 'application/pdf',
+    }
+
+    if mime_type in export_mime_types:
+        # Export Google Workspace files as PDF
+        request = service.files().export_media(
+            fileId=file_id,
+            mimeType=export_mime_types[mime_type]
+        )
+        # Ensure file has .pdf extension
+        if not file_path.lower().endswith('.pdf'):
+            file_path += '.pdf'
+    else:
+        # Download regular files as-is
+        request = service.files().get_media(fileId=file_id)
+
+    fh = io.FileIO(file_path, 'wb')
     downloader = MediaIoBaseDownload(fh, request)
     done = False
     while not done:
         status, done = downloader.next_chunk()
     fh.close()
-    return os.path.join(dest_folder, file_name)
+    print(f"Downloaded: {file_path}")
+    return file_path
+
+
 
 def upload_to_openai(file_path):
     with open(file_path, "rb") as f:
@@ -144,13 +178,19 @@ def main():
     # Step 1: Download PDFs from Google Drive
     service = get_drive_service()
     file_link = extract_folder_id(config.google_filelink)
+    print(file_link)
     pdf_files = list_pdfs_recursive(service,file_link)
     print(f"Found {len(pdf_files)} PDF files.")
-
+    print(pdf_files)
     file_ids = []
     for file in pdf_files:
         print(f"Downloading: {file['name']}")
-        local_path = download_pdf(service, file['id'], file['name'])
+        local_path = download_file(service=service,
+        file_id=file['id'],
+        file_name=file['name'],
+        mime_type=file['mimeType'],
+        dest_folder='pdfs'  # or any folder you want
+    )
         # print(f"Uploading {file['name']} to OpenAI...")
         # file_id = upload_to_openai(local_path)
         # print(f"Uploaded: {file_id}")
@@ -161,12 +201,12 @@ def main():
         return
 
     # Step 2: Create Assistant with uploaded PDFs
-    # assistant_id = create_assistant(file_ids)
-    # print(f"Assistant created with ID: {assistant_id}")
+    assistant_id = create_assistant(file_ids)
+    print(f"Assistant created with ID: {assistant_id}")
 
     # # Step 3: Query the Assistant
-    # question = input("Enter your question about the PDFs: ")
-    # query_assistant(assistant_id, question)
+    question = input("Enter your question about the PDFs: ")
+    query_assistant(assistant_id, question)
 
 if __name__ == "__main__":
     main()
