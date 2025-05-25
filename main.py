@@ -8,13 +8,14 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
 import pickle
 import config
+import re
 
 # Set up OpenAI
-openai.api_key = config.OPENAI_API_KEY
+openai.api_key = config.openai_apikey
 
 # Google Drive API setup
 SCOPES = ['https://www.googleapis.com/auth/drive.readonly']
-CREDENTIALS_FILE = config.GOOGLE_CREDENTIALS_FILE
+CREDENTIALS_FILE = config.google_credentials_file
 TOKEN_PICKLE = 'token.pickle'
 
 def get_drive_service():
@@ -33,13 +34,54 @@ def get_drive_service():
             pickle.dump(creds, token)
     return build('drive', 'v3', credentials=creds)
 
-def list_pdf_files(service):
-    results = service.files().list(
-        q="mimeType='application/pdf'",
-        pageSize=1000,
-        fields="files(id, name)"
-    ).execute()
-    return results.get('files', [])
+def extract_folder_id(link):
+    match = re.search(r'/folders/([a-zA-Z0-9_-]+)', link)
+    if match:
+        return match.group(1)
+    else:
+        raise ValueError("Invalid folder link")
+
+
+def list_pdfs_recursive(service, folder_id):
+    pdfs = []
+
+    # List PDFs in the current folder
+    query = f"mimeType='application/pdf' and '{folder_id}' in parents"
+    page_token = None
+    while True:
+        response = service.files().list(
+            q=query,
+            pageSize=1000,
+            fields="nextPageToken, files(id, name)",
+            pageToken=page_token
+        ).execute()
+        pdfs.extend(response.get('files', []))
+        page_token = response.get('nextPageToken', None)
+        if page_token is None:
+            break
+
+    # List subfolders in the current folder
+    folder_query = f"mimeType='application/vnd.google-apps.folder' and '{folder_id}' in parents"
+    page_token = None
+    subfolders = []
+    while True:
+        response = service.files().list(
+            q=folder_query,
+            pageSize=1000,
+            fields="nextPageToken, files(id, name)",
+            pageToken=page_token
+        ).execute()
+        subfolders.extend(response.get('files', []))
+        page_token = response.get('nextPageToken', None)
+        if page_token is None:
+            break
+
+    # Recursively search each subfolder
+    for folder in subfolders:
+        pdfs.extend(list_pdfs_recursive(service, folder['id']))
+
+    return pdfs
+
 
 def download_pdf(service, file_id, file_name, dest_folder='pdfs'):
     os.makedirs(dest_folder, exist_ok=True)
@@ -101,29 +143,30 @@ def query_assistant(assistant_id, question):
 def main():
     # Step 1: Download PDFs from Google Drive
     service = get_drive_service()
-    pdf_files = list_pdf_files(service)
+    file_link = extract_folder_id(config.google_filelink)
+    pdf_files = list_pdfs_recursive(service,file_link)
     print(f"Found {len(pdf_files)} PDF files.")
 
     file_ids = []
     for file in pdf_files:
         print(f"Downloading: {file['name']}")
         local_path = download_pdf(service, file['id'], file['name'])
-        print(f"Uploading {file['name']} to OpenAI...")
-        file_id = upload_to_openai(local_path)
-        print(f"Uploaded: {file_id}")
-        file_ids.append(file_id)
+        # print(f"Uploading {file['name']} to OpenAI...")
+        # file_id = upload_to_openai(local_path)
+        # print(f"Uploaded: {file_id}")
+        # file_ids.append(file_id)
 
     if not file_ids:
         print("No PDFs found or uploaded.")
         return
 
     # Step 2: Create Assistant with uploaded PDFs
-    assistant_id = create_assistant(file_ids)
-    print(f"Assistant created with ID: {assistant_id}")
+    # assistant_id = create_assistant(file_ids)
+    # print(f"Assistant created with ID: {assistant_id}")
 
-    # Step 3: Query the Assistant
-    question = input("Enter your question about the PDFs: ")
-    query_assistant(assistant_id, question)
+    # # Step 3: Query the Assistant
+    # question = input("Enter your question about the PDFs: ")
+    # query_assistant(assistant_id, question)
 
 if __name__ == "__main__":
     main()
