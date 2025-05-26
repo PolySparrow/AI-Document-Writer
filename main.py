@@ -9,9 +9,6 @@ from google.auth.transport.requests import Request
 import pickle
 import config
 import re
-import os
-import io
-from googleapiclient.http import MediaIoBaseDownload
 import google.auth
 from googleapiclient.errors import HttpError
 import json
@@ -109,9 +106,6 @@ def list_pdfs_recursive(service, folder_id):
 
 
 def download_file(service, file_id, file_name, mime_type, dest_folder='pdfs'):
-    import os
-    import io
-    from googleapiclient.http import MediaIoBaseDownload
 
     os.makedirs(dest_folder, exist_ok=True)
     file_path = os.path.join(dest_folder, file_name)
@@ -145,7 +139,7 @@ def download_file(service, file_id, file_name, mime_type, dest_folder='pdfs'):
     print(f"Downloaded: {file_path}")
     return file_path
 
-from googleapiclient.discovery import build
+
 
 def create_and_write_google_doc(service, title, content):
     """
